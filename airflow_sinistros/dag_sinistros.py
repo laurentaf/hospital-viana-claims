@@ -3,7 +3,7 @@ DAG: ingestao_sinistros_viana
 
 Pipeline de ingestão e validação de sinistros médicos do Hospital Viana.
 
-Consome dados crus via API da DataMission, salva CSV particionado por data,
+Consome dados crus via API da DataMission, salva CSV em data/raw/sinistros.csv,
 aplica verificações de qualidade (schema + regras) e expõe registros
 validados para análise da equipe de risco.
 
@@ -39,21 +39,17 @@ default_args = {
 }
 
 
-def _build_api_url() -> str:
-    project_id = os.environ.get("DATAMISSION_PROJECT_ID")
-    if not project_id:
-        raise ValueError("DATAMISSION_PROJECT_ID environment variable not set")
+def _build_api_url(project_id: str) -> str:
     return f"https://api.datamission.com.br/projects/{project_id}/dataset?format=csv"
 
 
-def fetch_sinistros(**context):
+def fetch_sinistros(project_id, **context):
     token = settings.DATAMISSION_API_KEY
     if not token:
         raise ValueError("DATAMISSION_API_KEY environment variable not set")
 
-    url = _build_api_url()
+    url = _build_api_url(project_id)
     headers = {"Authorization": f"Bearer {token}"}
-    execution_date = context.get("ds", datetime.now().strftime("%Y-%m-%d"))
 
     status = 0
     content_size = 0
@@ -68,14 +64,13 @@ def fetch_sinistros(**context):
         raise
 
     os.makedirs(RAW_DIR, exist_ok=True)
-    raw_path = os.path.join(RAW_DIR, f"sinistros_{execution_date}.csv")
+    raw_path = os.path.join(RAW_DIR, "sinistros.csv")
     with open(raw_path, "wb") as f:
         f.write(response.content)
 
     context["ti"].xcom_push(key="raw_path", value=raw_path)
     context["ti"].xcom_push(key="raw_bytes", value=content_size)
     context["ti"].xcom_push(key="status_code", value=status)
-    context["ti"].xcom_push(key="execution_date", value=execution_date)
     logger.info("Saved %d bytes to %s", content_size, raw_path)
 
 
@@ -141,6 +136,7 @@ with DAG(
     t1 = PythonOperator(
         task_id="fetch_sinistros",
         python_callable=fetch_sinistros,
+        op_kwargs={"project_id": settings.DATAMISSION_PROJECT_ID or os.environ.get("DATAMISSION_PROJECT_ID")},
         provide_context=True,
     )
 

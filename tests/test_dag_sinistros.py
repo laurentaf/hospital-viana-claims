@@ -187,13 +187,35 @@ class TestDagSinistros:
         """PROJECT_ID must come from env var, not be a string constant."""
         source = DAG_PATH.read_text()
         assert "DATAMISSION_PROJECT_ID" in source
-        # Ensure the UUID is NOT hardcoded in the DAG
         assert "1b077a7a" not in source or "env" in source
 
     def test_api_key_from_settings(self):
         """API key must come from Settings, not os.environ directly."""
         source = DAG_PATH.read_text()
         assert "settings.DATAMISSION_API_KEY" in source
+
+    # --- Parametrised callable (evaluation feedback) ---
+
+    def test_fetch_accepts_project_id_param(self):
+        """fetch_sinistros must accept project_id as first argument."""
+        tree = _parse()
+        fetch_func = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "fetch_sinistros"
+        )
+        arg_names = [a.arg for a in fetch_func.args.args]
+        assert "project_id" in arg_names, f"fetch_sinistros args: {arg_names}"
+
+    def test_op_kwargs_passes_project_id(self):
+        """PythonOperator t1 must pass project_id via op_kwargs."""
+        source = DAG_PATH.read_text()
+        assert "op_kwargs" in source
+        assert "project_id" in source
+
+    def test_fixed_output_filename(self):
+        """Output must be sinistros.csv, not date-partitioned."""
+        source = DAG_PATH.read_text()
+        assert '"sinistros.csv"' in source or "'sinistros.csv'" in source
 
     def test_uses_logging_not_print(self):
         """Use logging module, not print()."""
