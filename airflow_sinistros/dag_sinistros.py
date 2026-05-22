@@ -13,9 +13,8 @@ Business context:
   que a equipe de risco tenha dados confiáveis antes do fechamento mensal.
 """
 
-import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from airflow import DAG
@@ -32,7 +31,7 @@ default_args = {
     "email_on_failure": True,
     "email_on_retry": False,
     "retries": 2,
-    "retry_delay": 300,
+    "retry_delay": timedelta(minutes=5),
 }
 
 
