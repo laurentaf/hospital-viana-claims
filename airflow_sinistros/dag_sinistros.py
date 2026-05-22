@@ -74,40 +74,43 @@ def fetch_sinistros(project_id, **context):
     logger.info("Saved %d bytes to %s", content_size, raw_path)
 
 
-def validate_sinistros(**context):
+def process_sinistros(**context):
+    # Etapa 1: ler CSV bruto baixado pela tarefa anterior
     ti = context["ti"]
     raw_path = ti.xcom_pull(key="raw_path", task_ids="fetch_sinistros")
-
     if not raw_path or not os.path.exists(raw_path):
         raise FileNotFoundError(f"Raw file not found: {raw_path}")
+    logger.info("Processing %s", raw_path)
 
-    logger.info("Validating %s", raw_path)
+    # Etapa 2: carregar com pandas e validar schema mínimo
     df = pd.read_csv(raw_path)
     logger.info("Loaded %d rows, %d columns", len(df), len(df.columns))
-
     required_cols = {"sinistro_id", "valor"}
     actual_cols = set(df.columns)
     missing = required_cols - actual_cols
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
+    # Etapa 3: aplicar regras de qualidade via DataQualityValidator
+    # Regras:
+    #   - sinistro_id: not_null + unique (chave primária do sinistro)
+    #   - valor:       not_null + positive  (valor financeiro deve ser > 0)
     validator = DataQualityValidator()
-    db_path = os.path.join(os.path.dirname(RAW_DIR), "staging", "sinistros_validados.duckdb")
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-
-    df.to_sql("sinistros_raw", validator.con, if_exists="replace", index=False)
-
     checks = [
         QualityCheck(column="sinistro_id", rule="not_null"),
         QualityCheck(column="sinistro_id", rule="unique"),
         QualityCheck(column="valor", rule="not_null"),
         QualityCheck(column="valor", rule="positive"),
     ]
+    db_path = os.path.join(os.path.dirname(RAW_DIR), "staging", "sinistros_validados.duckdb")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    df.to_sql("sinistros_raw", validator.con, if_exists="replace", index=False)
     results = validator.check_table("sinistros_raw", checks)
     report = validator.report(results)
     logger.info("Quality report:\n%s", report)
 
-    validator.con.execute(f"CREATE OR REPLACE TABLE sinistros_clean AS SELECT * FROM sinistros_raw")
+    # Etapa 4: persistir registros aprovados no DuckDB staging
+    validator.con.execute("CREATE OR REPLACE TABLE sinistros_clean AS SELECT * FROM sinistros_raw")
     validator.con.execute(f"ATTACH '{db_path}' AS staging")
     validator.con.execute("CREATE OR REPLACE TABLE staging.sinistros AS SELECT * FROM sinistros_raw")
     validator.close()
@@ -116,10 +119,8 @@ def validate_sinistros(**context):
     ti.xcom_push(key="validation_passed", value=passed)
     ti.xcom_push(key="total_rows", value=len(df))
     ti.xcom_push(key="quality_report", value=report)
-
     if not passed:
         raise ValueError(f"Quality checks failed:\n{report}")
-
     logger.info("Validation passed — %d rows clean", len(df))
 
 
@@ -141,8 +142,8 @@ with DAG(
     )
 
     t2 = PythonOperator(
-        task_id="validate_sinistros",
-        python_callable=validate_sinistros,
+        task_id="process_sinistros",
+        python_callable=process_sinistros,
         provide_context=True,
     )
 

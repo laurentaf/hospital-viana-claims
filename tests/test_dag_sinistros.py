@@ -223,19 +223,18 @@ class TestDagSinistros:
         assert "logger." in source
         assert "print(" not in source
 
-    # --- Validate task ---
+    # --- Process task ---
 
-    def test_has_validate_function(self):
+    def test_has_process_function(self):
         tree = _parse()
         funcs = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
-        assert "validate_sinistros" in funcs
+        assert "process_sinistros" in funcs
 
-    def test_validate_uses_data_quality(self):
-        """validate_sinistros must use DataQualityValidator from the template."""
+    def test_process_uses_data_quality(self):
         source = DAG_PATH.read_text()
         assert "DataQualityValidator" in source
 
-    def test_validate_checks_sinistro_id_and_valor(self):
+    def test_process_checks_sinistro_id_and_valor(self):
         source = DAG_PATH.read_text()
         assert "sinistro_id" in source
         assert "valor" in source
