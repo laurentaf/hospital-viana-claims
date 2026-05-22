@@ -41,8 +41,15 @@ def fetch_sinistros(**context):
         raise ValueError("DATAMISSION_API_KEY environment variable not set")
 
     headers = {"Authorization": f"Bearer {token}"}
-    response = requests.get(API_URL, headers=headers, timeout=120)
-    response.raise_for_status()
+    try:
+        response = requests.get(API_URL, headers=headers, timeout=120)
+        status = response.status_code
+        content_size = len(response.content)
+        print(f"API response — status: {status}, bytes: {content_size}")
+        response.raise_for_status()
+    except requests.RequestException as e:
+        print(f"API request failed — status: {status}, bytes: {content_size}, error: {e}")
+        raise
 
     os.makedirs(RAW_DIR, exist_ok=True)
     raw_path = os.path.join(RAW_DIR, "sinistros.csv")
@@ -50,10 +57,8 @@ def fetch_sinistros(**context):
         f.write(response.content)
 
     context["ti"].xcom_push(key="raw_path", value=raw_path)
-    context["ti"].xcom_push(key="raw_bytes", value=len(response.content))
-    context["ti"].xcom_push(key="status_code", value=response.status_code)
-
-    print(f"Downloaded {len(response.content)} bytes from API (status {response.status_code})")
+    context["ti"].xcom_push(key="raw_bytes", value=content_size)
+    context["ti"].xcom_push(key="status_code", value=status)
 
 
 with DAG(

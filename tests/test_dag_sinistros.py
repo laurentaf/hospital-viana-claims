@@ -174,3 +174,26 @@ class TestDagSinistros:
         """timedelta must be imported for retry_delay."""
         source = DAG_PATH.read_text()
         assert "timedelta" in source, "timedelta must be imported from datetime"
+
+    # --- Mission 2: try/except + logging ---
+
+    def test_fetch_has_try_except(self):
+        """fetch_sinistros must have try/except to log status and size before failing."""
+        tree = _parse()
+        fetch_func = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "fetch_sinistros"
+        )
+        has_try = any(isinstance(n, ast.Try) for n in ast.walk(fetch_func))
+        assert has_try, "fetch_sinistros must wrap requests.get in try/except"
+
+    def test_fetch_logs_status_and_bytes(self):
+        """try/except must print status_code and content size."""
+        source = DAG_PATH.read_text()
+        assert "status:" in source or "status_code" in source
+        assert "bytes:" in source or "content_size" in source or "len(" in source
+
+    def test_fetch_has_project_id_param(self):
+        """fetch_sinistros must pass project_id (as constant or param)."""
+        source = DAG_PATH.read_text()
+        assert "project_id" in source.lower() or "PROJECT_ID" in source
