@@ -3,9 +3,9 @@ DAG: ingestao_sinistros_viana
 
 Pipeline de ingestão e validação de sinistros médicos do Hospital Viana.
 
-Consome dados crus via API da DataMission, salva CSV localmente,
-aplica verificações básicas de qualidade e expõe registros validados
-para análise da equipe de risco.
+Consome dados crus via API da DataMission, salva CSV particionado por data,
+aplica verificações de qualidade (schema + regras) e expõe registros
+validados para análise da equipe de risco.
 
 Business context:
   Hospital Viana — R$ 300M receita anual. Dados desatualizados levam
@@ -13,17 +13,21 @@ Business context:
   que a equipe de risco tenha dados confiáveis antes do fechamento mensal.
 """
 
+import logging
 import os
 from datetime import datetime, timedelta
 
+import pandas as pd
 import requests
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-PROJECT_ID = "1b077a7a-b328-4546-8780-9a7ab909c152"
-API_URL = f"https://api.datamission.com.br/projects/{PROJECT_ID}/dataset?format=csv"
+from src.core.config import settings
+from src.core.data_quality import DataQualityValidator, QualityCheck
+
+logger = logging.getLogger(__name__)
+
 RAW_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "raw")
-STAGING_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "staging")
 
 default_args = {
     "owner": "hospital-viana",
@@ -35,30 +39,93 @@ default_args = {
 }
 
 
+def _build_api_url() -> str:
+    project_id = os.environ.get("DATAMISSION_PROJECT_ID")
+    if not project_id:
+        raise ValueError("DATAMISSION_PROJECT_ID environment variable not set")
+    return f"https://api.datamission.com.br/projects/{project_id}/dataset?format=csv"
+
+
 def fetch_sinistros(**context):
-    token = os.environ.get("DATAMISSION_API_KEY")
+    token = settings.DATAMISSION_API_KEY
     if not token:
         raise ValueError("DATAMISSION_API_KEY environment variable not set")
 
+    url = _build_api_url()
     headers = {"Authorization": f"Bearer {token}"}
+    execution_date = context.get("ds", datetime.now().strftime("%Y-%m-%d"))
+
+    status = 0
+    content_size = 0
     try:
-        response = requests.get(API_URL, headers=headers, timeout=120)
+        response = requests.get(url, headers=headers, timeout=120)
         status = response.status_code
         content_size = len(response.content)
-        print(f"API response — status: {status}, bytes: {content_size}")
+        logger.info("API response — status: %d, bytes: %d", status, content_size)
         response.raise_for_status()
     except requests.RequestException as e:
-        print(f"API request failed — status: {status}, bytes: {content_size}, error: {e}")
+        logger.error("API request failed — status: %d, bytes: %d, error: %s", status, content_size, e)
         raise
 
     os.makedirs(RAW_DIR, exist_ok=True)
-    raw_path = os.path.join(RAW_DIR, "sinistros.csv")
+    raw_path = os.path.join(RAW_DIR, f"sinistros_{execution_date}.csv")
     with open(raw_path, "wb") as f:
         f.write(response.content)
 
     context["ti"].xcom_push(key="raw_path", value=raw_path)
     context["ti"].xcom_push(key="raw_bytes", value=content_size)
     context["ti"].xcom_push(key="status_code", value=status)
+    context["ti"].xcom_push(key="execution_date", value=execution_date)
+    logger.info("Saved %d bytes to %s", content_size, raw_path)
+
+
+def validate_sinistros(**context):
+    ti = context["ti"]
+    raw_path = ti.xcom_pull(key="raw_path", task_ids="fetch_sinistros")
+
+    if not raw_path or not os.path.exists(raw_path):
+        raise FileNotFoundError(f"Raw file not found: {raw_path}")
+
+    logger.info("Validating %s", raw_path)
+    df = pd.read_csv(raw_path)
+    logger.info("Loaded %d rows, %d columns", len(df), len(df.columns))
+
+    required_cols = {"sinistro_id", "valor"}
+    actual_cols = set(df.columns)
+    missing = required_cols - actual_cols
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+
+    validator = DataQualityValidator()
+    db_path = os.path.join(os.path.dirname(RAW_DIR), "staging", "sinistros_validados.duckdb")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
+    df.to_sql("sinistros_raw", validator.con, if_exists="replace", index=False)
+
+    checks = [
+        QualityCheck(column="sinistro_id", rule="not_null"),
+        QualityCheck(column="sinistro_id", rule="unique"),
+        QualityCheck(column="valor", rule="not_null"),
+        QualityCheck(column="valor", rule="positive"),
+    ]
+    results = validator.check_table("sinistros_raw", checks)
+    report = validator.report(results)
+    logger.info("Quality report:\n%s", report)
+
+    validator.con.execute(f"CREATE OR REPLACE TABLE sinistros_clean AS SELECT * FROM sinistros_raw")
+    validator.con.execute(f"ATTACH '{db_path}' AS staging")
+    validator.con.execute("CREATE OR REPLACE TABLE staging.sinistros AS SELECT * FROM sinistros_raw")
+    validator.close()
+
+    passed = all(r.passed for r in results)
+    ti.xcom_push(key="validation_passed", value=passed)
+    ti.xcom_push(key="total_rows", value=len(df))
+    ti.xcom_push(key="quality_report", value=report)
+
+    if not passed:
+        raise ValueError(f"Quality checks failed:\n{report}")
+
+    logger.info("Validation passed — %d rows clean", len(df))
 
 
 with DAG(
@@ -76,3 +143,11 @@ with DAG(
         python_callable=fetch_sinistros,
         provide_context=True,
     )
+
+    t2 = PythonOperator(
+        task_id="validate_sinistros",
+        python_callable=validate_sinistros,
+        provide_context=True,
+    )
+
+    t1 >> t2

@@ -5,9 +5,6 @@ class Settings(BaseSettings):
     # Relational Database
     DATABASE_URL: str = "postgresql+psycopg://prefect:password@localhost:5433/prefect"
 
-    # Vector Database
-    QDRANT_URL: str = "http://localhost:6333"
-
     # Object Storage
     MINIO_URL: str = "http://localhost:9000"
     MINIO_ACCESS_KEY: str = "minioadmin"
@@ -20,6 +17,10 @@ class Settings(BaseSettings):
     GITHUB_TOKEN: str | None = None
     OPENCODE_API_KEY: str | None = None
 
+    # DataMission (Hospital Viana)
+    DATAMISSION_API_KEY: str | None = None
+    DATAMISSION_PROJECT_ID: str | None = None
+
     # App Config
     PROJECT_NAME: str = "ai-data-project"
     PHOENIX_URL: str = "http://localhost:6006"
@@ -27,7 +28,6 @@ class Settings(BaseSettings):
 
     # MCP Server URLs
     MCP_POSTGRES_URL: str | None = None
-    MCP_QDRANT_URL: str | None = None
     MCP_GITHUB_URL: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

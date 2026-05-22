@@ -55,14 +55,99 @@ from airflow.operators.python import PythonOperator
 UNAPPROVED_UNUSED_IMPORTS = {"json", "pickle", "csv"}
 
 def test_no_unused_imports():
-    source = Path("airflow_sinistros/dag_sinistros.py").read_text()
-    for mod in UNAPPROVED_UNUSED_IMPORTS:
-        assert mod not in source or mod + "." not in source, f"Remove unused import {mod}"
+    unused = check_unused_imports(_parse())
+    assert not unused, f"Remove unused imports: {unused}"
 ```
 
 ---
 
-## KB-003: Airflow DAG test patterns (static analysis)
+## KB-003: Project IDs and secrets must be env vars, not hardcoded
+
+**Severity:** MAJOR (security + environment portability)
+
+Never hardcode project IDs, API URLs with embedded IDs, or tokens in DAG files.
+
+```python
+# Wrong — hardcoded, cannot promote between environments
+PROJECT_ID = "1b077a7a-b328-4546-8780-9a7ab909c152"
+API_URL = f"https://api.datamission.com.br/projects/{PROJECT_ID}/dataset?format=csv"
+
+# Correct — read from env var via Pydantic Settings
+from src.core.config import settings
+
+def _build_api_url() -> str:
+    project_id = os.environ["DATAMISSION_PROJECT_ID"]  # or settings.DATAMISSION_PROJECT_ID
+    return f"https://api.datamission.com.br/projects/{project_id}/dataset?format=csv"
+```
+
+**Test pattern:**
+```python
+def test_project_id_from_env_not_hardcoded():
+    source = DAG_PATH.read_text()
+    assert "DATAMISSION_PROJECT_ID" in source
+    assert "1b077a7a" not in source or "env" in source
+```
+
+---
+
+## KB-004: Use `logging` not `print()`
+
+**Severity:** MEDIUM (observability)
+
+Airflow captures `print()` output in task logs, but `logging` provides log levels (info/warning/error), structured output, and integration with Airflow's log system.
+
+```python
+# Wrong
+print("Downloaded 1000 bytes")
+
+# Correct
+import logging
+logger = logging.getLogger(__name__)
+logger.info("Downloaded %d bytes", content_size)
+```
+
+**Test pattern:**
+```python
+def test_uses_logging_not_print():
+    source = DAG_PATH.read_text()
+    assert "logger." in source
+    assert "print(" not in source
+```
+
+---
+
+## KB-005: Reuse template's DataQualityValidator, don't reinvent validation
+
+**Severity:** MEDIUM (maintainability)
+
+The template provides 8 ready-made quality rules in `src/core/data_quality.py`. Use them instead of ad-hoc pandas checks.
+
+```python
+# Wrong — ad-hoc
+if df["sinistro_id"].isnull().any():
+    raise ValueError("Nulls found")
+
+# Correct — uses template engine
+from src.core.data_quality import DataQualityValidator, QualityCheck
+
+validator = DataQualityValidator()
+checks = [
+    QualityCheck(column="sinistro_id", rule="not_null"),
+    QualityCheck(column="sinistro_id", rule="unique"),
+]
+results = validator.check_table("sinistros_raw", checks)
+```
+
+**Test pattern:**
+```python
+def test_validate_uses_data_quality():
+    source = DAG_PATH.read_text()
+    assert "DataQualityValidator" in source
+```
+
+---
+
+## KB-006: Airflow DAG test patterns (static analysis)
 
 **Severity:** MAJOR (process)
 

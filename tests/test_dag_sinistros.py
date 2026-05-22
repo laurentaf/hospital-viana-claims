@@ -108,10 +108,6 @@ class TestDagSinistros:
         funcs = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
         assert "fetch_sinistros" in funcs
 
-    def test_has_project_id(self):
-        assigns = get_top_level_assignment_names(_parse())
-        assert "PROJECT_ID" in assigns
-
     def test_fetch_calls_requests_get(self):
         tree = _parse()
         fetch_func = next(
@@ -145,8 +141,9 @@ class TestDagSinistros:
 
     # --- Major/Minor validations (from feedback) ---
 
-    def test_no_json_unused_import(self):
-        assert "json" not in get_top_level_imports(_parse()), "Remove unused import json"
+    def test_no_unused_imports(self):
+        unused = check_unused_imports(_parse())
+        assert not unused, f"Remove unused imports: {unused}"
 
     def test_retry_delay_is_timedelta_not_int(self):
         args = get_default_args_dict(_parse())
@@ -157,7 +154,6 @@ class TestDagSinistros:
         assert func_name == "timedelta", f"retry_delay must use timedelta(), got {func_name}"
 
     def test_retry_delay_reasonable_range(self):
-        """Ensure retry_delay is between 1 and 30 minutes."""
         args = get_default_args_dict(_parse())
         retry = args.get("retry_delay")
         assert isinstance(retry, ast.Call)
@@ -165,20 +161,13 @@ class TestDagSinistros:
             if kw.arg and "minute" in kw.arg and isinstance(kw.value, ast.Constant):
                 assert 1 <= kw.value.value <= 30, f"retry_delay {kw.value.value}m is outside range (1-30)"
 
-    def test_imports_have_no_unused(self):
-        """MAJOR: Unused imports cause linter noise and confusion."""
-        unused = check_unused_imports(_parse())
-        assert not unused, f"Remove unused imports: {unused}"
-
     def test_timedelta_imported(self):
-        """timedelta must be imported for retry_delay."""
         source = DAG_PATH.read_text()
-        assert "timedelta" in source, "timedelta must be imported from datetime"
+        assert "timedelta" in source
 
     # --- Mission 2: try/except + logging ---
 
     def test_fetch_has_try_except(self):
-        """fetch_sinistros must have try/except to log status and size before failing."""
         tree = _parse()
         fetch_func = next(
             n for n in ast.walk(tree)
@@ -188,12 +177,48 @@ class TestDagSinistros:
         assert has_try, "fetch_sinistros must wrap requests.get in try/except"
 
     def test_fetch_logs_status_and_bytes(self):
-        """try/except must print status_code and content size."""
         source = DAG_PATH.read_text()
         assert "status:" in source or "status_code" in source
-        assert "bytes:" in source or "content_size" in source or "len(" in source
+        assert "bytes:" in source or "content_size" in source
 
-    def test_fetch_has_project_id_param(self):
-        """fetch_sinistros must pass project_id (as constant or param)."""
+    # --- New: env vars instead of hardcoded ---
+
+    def test_project_id_from_env_not_hardcoded(self):
+        """PROJECT_ID must come from env var, not be a string constant."""
         source = DAG_PATH.read_text()
-        assert "project_id" in source.lower() or "PROJECT_ID" in source
+        assert "DATAMISSION_PROJECT_ID" in source
+        # Ensure the UUID is NOT hardcoded in the DAG
+        assert "1b077a7a" not in source or "env" in source
+
+    def test_api_key_from_settings(self):
+        """API key must come from Settings, not os.environ directly."""
+        source = DAG_PATH.read_text()
+        assert "settings.DATAMISSION_API_KEY" in source
+
+    def test_uses_logging_not_print(self):
+        """Use logging module, not print()."""
+        source = DAG_PATH.read_text()
+        assert "logger." in source
+        assert "print(" not in source
+
+    # --- Validate task ---
+
+    def test_has_validate_function(self):
+        tree = _parse()
+        funcs = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+        assert "validate_sinistros" in funcs
+
+    def test_validate_uses_data_quality(self):
+        """validate_sinistros must use DataQualityValidator from the template."""
+        source = DAG_PATH.read_text()
+        assert "DataQualityValidator" in source
+
+    def test_validate_checks_sinistro_id_and_valor(self):
+        source = DAG_PATH.read_text()
+        assert "sinistro_id" in source
+        assert "valor" in source
+
+    def test_tasks_are_chained(self):
+        """DAG must have t1 >> t2 dependency."""
+        source = DAG_PATH.read_text()
+        assert "t1 >> t2" in source

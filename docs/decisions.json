@@ -1,0 +1,58 @@
+[
+  {
+    "id": "ADR-001",
+    "title": "Airflow como orquestrador principal",
+    "status": "accepted",
+    "context": "Hospital Viana precisa de pipeline orquestrado com schedule diario, retry, e logging. Prefect estava disponivel no template mas Airflow e o padrao da organizacao.",
+    "decision": "Usar Apache Airflow com PythonOperator para ingestao e validacao, mantendo src/ para logica reutilizavel.",
+    "consequences": "DAG versionado no git, schedule @daily, 2 retentativas. Perde integracao nativa com multi-agente do template.",
+    "alternatives": [
+      "Prefect (ja no template)",
+      "script cron simples",
+      "execucao manual"
+    ],
+    "sdd_phase": "brainstorm",
+    "date": "2026-05-22T17:11:54.481345",
+    "author": "laurent",
+    "tags": [],
+    "workflow_id": null,
+    "feature": null
+  },
+  {
+    "id": "ADR-002",
+    "title": "PROJECT_ID como variavel de ambiente",
+    "status": "accepted",
+    "context": "PROJECT_ID estava hardcoded no DAG, impedindo promocao entre ambientes.",
+    "decision": "Mover PROJECT_ID para DATAMISSION_PROJECT_ID em env var, gerenciado via Settings Pydantic.",
+    "consequences": "Codigo independente de ambiente. .env.example documenta defaults.",
+    "alternatives": [
+      "Manter hardcoded",
+      "config file YAML",
+      "Vault"
+    ],
+    "sdd_phase": "design",
+    "date": "2026-05-22T17:11:54.481845",
+    "author": "laurent",
+    "tags": [],
+    "workflow_id": null,
+    "feature": null
+  },
+  {
+    "id": "ADR-003",
+    "title": "DataQualityValidator do template para validacao",
+    "status": "accepted",
+    "context": "Template fornece 8 regras de qualidade prontas (not_null, unique, positive).",
+    "decision": "Usar DataQualityValidator do template. Regras: not_null + unique em sinistro_id, not_null + positive em valor.",
+    "consequences": "Validacao reutilizavel, testada (37 testes no template). DuckDB como backend de staging.",
+    "alternatives": [
+      "Pandas ad-hoc",
+      "Great Expectations (overkill)"
+    ],
+    "sdd_phase": "design",
+    "date": "2026-05-22T17:11:54.489370",
+    "author": "laurent",
+    "tags": [],
+    "workflow_id": null,
+    "feature": null
+  }
+]
